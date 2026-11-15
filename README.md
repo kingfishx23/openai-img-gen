@@ -34,5 +34,10 @@ node skills/openai-img-gen/index.js --help
 ```
 
 Without `-i` it generates a new image. With `-i` (repeatable) it edits or combines those images. It prints each saved
-file's path on stdout, and the token use and estimated cost on stderr. The default model is `gpt-image-2.5-sunburst`;
+file's path on stdout, and the token use and estimated cost on stderr. The prompt is saved beside the images as
+`<name>-<time>.prompt.txt`.
+
+Images go to the current folder by default. To keep them in one place, set `OPENAI_IMG_GEN_OUT` in `.env`. Then
+`-p kualing` saves to `$OPENAI_IMG_GEN_OUT/kualing/`. The agent always passes `-p` with the project you're working on.
+`-o DIR` saves to exactly that folder. The default model is `gpt-image-2.5-sunburst`;
 change it with `--model` or `OPENAI_IMAGE_MODEL`.

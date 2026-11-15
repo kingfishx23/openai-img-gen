@@ -13,16 +13,21 @@ node <this skill's directory>/index.js -i photo.jpg -i reference.png [options] -
 ```
 
 Without `-i` it makes a new image. With `-i` it edits or combines the given images. It prints each saved file's
-absolute path on stdout. Progress, token use, cost and errors go to stderr. Run `--help` for every option. The main ones
-are `-o DIR` (output folder, default: current folder), `--name PREFIX`, `-s auto|1024x1024|1536x1024|1024x1536`,
-`-q auto|low|medium|high`, `-n COUNT`, `--format png|jpeg|webp` and `--background transparent`.
+absolute path on stdout and saves the prompt beside the images as `<name>-<time>.prompt.txt`. Progress, token use,
+cost and errors go to stderr. Run `--help` for every option. The main ones are `-p NAME` (project subfolder),
+`-o DIR` (exact folder), `--name PREFIX`, `-s auto|1024x1024|1536x1024|1024x1536`, `-q auto|low|medium|high`,
+`-n COUNT`, `--format png|jpeg|webp` and `--background transparent`.
+
+**Where images go:** with `-p NAME` they go to `$OPENAI_IMG_GEN_OUT/NAME/`. The base folder is set in this skill's `.env`,
+or else it's the current folder. `-o DIR` overrides that and saves exactly there.
 
 ## Steps
 
-1. **Write the prompt.** For anything longer than a sentence, write it to a file and pass it with `-f`, so the user
-   can see and reuse it. See "Writing prompts" below.
-2. **Run it.** Choose a sensible `-o` folder (for example next to the user's input images) and a descriptive `--name`.
-   Each call costs money. One image at `-q auto` usually costs a few cents, and `high` and `-n` multiply that. Use
+1. **Write the prompt.** For anything longer than a sentence, write it to a file and pass it with `-f`. See
+   "Writing prompts" below.
+2. **Run it.** Always pass `-p` with a short name for the project in context: the brand, product, repo or folder the
+   user is working on (for example `-p es-sebelas` or `-p kualing`), or a short topic if there's no project. Pass `-o`
+   only when the user names a folder. Use a descriptive `--name`. Each call costs money. One image at `-q auto` usually costs a few cents, and `high` and `-n` multiply that. Use
    `-q low` for quick drafts, and ask before making more than about 4 images or many high-quality ones.
 3. **Show the result.** Open the saved file with the Read tool so you can see it. Check it against the prompt (text
    spelling, what had to stay the same), then tell the user the path, what you see and the cost line.

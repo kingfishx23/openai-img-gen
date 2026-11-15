@@ -27,7 +27,9 @@ Options:
   -i, --image FILE        input image (PNG, JPEG, WebP); repeat for several. Switches to edit mode:
                           the result is based on these images, in the order given.
   -f, --prompt-file FILE  read the prompt from a file
-  -o, --out DIR           output folder (default: current folder)
+  -p, --project NAME      save into a subfolder named after the project (e.g. es-sebelas)
+  -o, --out DIR           exact output folder; overrides the default and --project
+                          (default: $OPENAI_IMG_GEN_OUT, else the current folder; plus /NAME with -p)
       --name PREFIX       file name prefix (default: image)
   -s, --size SIZE         auto | 1024x1024 | 1536x1024 | 1024x1536 (default: auto)
   -q, --quality Q         auto | low | medium | high (default: auto)
@@ -68,7 +70,8 @@ function optionSpec() {
   return {
     image: { type: 'string', short: 'i', multiple: true, default: [] },
     'prompt-file': { type: 'string', short: 'f' },
-    out: { type: 'string', short: 'o', default: '.' },
+    out: { type: 'string', short: 'o' },
+    project: { type: 'string', short: 'p' },
     name: { type: 'string', default: 'image' },
     size: { type: 'string', short: 's', default: 'auto' },
     quality: { type: 'string', short: 'q', default: 'auto' },
@@ -78,6 +81,16 @@ function optionSpec() {
     model: { type: 'string', default: process.env.OPENAI_IMAGE_MODEL || DEFAULT_MODEL },
     help: { type: 'boolean', short: 'h' },
   };
+}
+
+// -o wins. Otherwise $OPENAI_IMG_GEN_OUT (or the current folder), plus a project subfolder when -p is given.
+function outputDir() {
+  if (opt.out) return path.resolve(opt.out);
+  const base = path.resolve(process.env.OPENAI_IMG_GEN_OUT || '.');
+  if (!opt.project) return base;
+  const slug = opt.project.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+  if (!slug) throw new UserError(`--project "${opt.project}" has no usable characters for a folder name.`);
+  return path.join(base, slug);
 }
 
 async function readStdin() {
@@ -166,6 +179,8 @@ async function main() {
   if (opt.background) params.background = opt.background;
 
   const images = await readImages();
+  const outDir = outputDir();
+  await fs.mkdir(outDir, { recursive: true }); // before the API call, so a bad folder costs nothing
   const key = apiKey();
   const mode = images.length ? `editing ${images.length} image(s)` : 'generating';
   console.error(`${opt.model}: ${mode}, ${n} x ${opt.size}, quality ${opt.quality}...`);
@@ -174,12 +189,14 @@ async function main() {
   if (!res.ok) throw apiError(res, body);
   if (!body?.data?.length) throw new UserError('The API returned no images.');
 
-  await fs.mkdir(opt.out, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const base = `${opt.name}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   const ext = opt.format === 'jpeg' ? 'jpg' : opt.format;
+  // The prompt and inputs are saved beside the images, so any result can be reproduced.
+  const inputs = opt.image.length ? `Input images, in order:\n${opt.image.map((f) => `- ${path.resolve(f)}`).join('\n')}\n\n` : '';
+  await fs.writeFile(path.join(outDir, `${base}.prompt.txt`), `${inputs}${prompt}\n`);
   for (const [i, img] of body.data.entries()) {
     if (!img.b64_json) throw new UserError('The API returned an image without data.');
-    const file = path.resolve(opt.out, `${opt.name}-${stamp}${body.data.length > 1 ? `-${i + 1}` : ''}.${ext}`);
+    const file = path.join(outDir, `${base}${body.data.length > 1 ? `-${i + 1}` : ''}.${ext}`);
     await fs.writeFile(file, Buffer.from(img.b64_json, 'base64'));
     console.log(file);
   }
