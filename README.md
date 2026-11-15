@@ -16,13 +16,14 @@ Run the same command again to pull the latest version.
 
 ## API key
 
-Set `OPENAI_API_KEY`, or put it in `~/.config/openai-img-gen/.env`:
+Set `OPENAI_API_KEY`, or copy `skills/openai-img-gen/.env.example` to `.env` in the same folder and fill it in:
 
 ```
 OPENAI_API_KEY=sk-...
 ```
 
-The file lives outside the skill folder, so updating the skill doesn't remove it.
+`.env` is gitignored. A real `OPENAI_API_KEY` environment variable takes priority over it. If you installed with
+`npx skills add`, keep a copy of your `.env`, because reinstalling the skill may replace the folder.
 
 ## Use the script on its own
 

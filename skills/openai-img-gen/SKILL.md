@@ -28,8 +28,8 @@ are `-o DIR` (output folder, default: current folder), `--name PREFIX`, `-s auto
    spelling, what had to stay the same), then tell the user the path, what you see and the cost line.
 4. **Iterate.** Change the prompt based on what went wrong, and keep the prompt file updated so it matches the best result.
 
-If there is no API key, tell the user to set `OPENAI_API_KEY` or to put `OPENAI_API_KEY=sk-...` in
-`~/.config/openai-img-gen/.env`. Never ask them to paste the key into chat. If a request is blocked by moderation,
+If there is no API key, tell the user to set `OPENAI_API_KEY`, or to copy `.env.example` in this skill's directory to
+`.env` and fill it in. Never ask them to paste the key into chat. If a request is blocked by moderation,
 report the reason the script prints and suggest a reworded prompt. Don't retry the same prompt.
 
 ## Writing prompts

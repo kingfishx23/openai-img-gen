@@ -4,13 +4,14 @@
 // Saved file paths go to stdout, one per line. Progress, cost and errors go to stderr.
 
 const fs = require('node:fs/promises');
-const os = require('node:os');
+const { readFileSync } = require('node:fs');
 const path = require('node:path');
 const { parseArgs } = require('node:util');
 
 const API = 'https://api.openai.com/v1/images';
 const DEFAULT_MODEL = 'gpt-image-2.5-sunburst';
-const KEY_FILE = path.join(os.homedir(), '.config', 'openai-img-gen', '.env');
+const ENV_FILE = path.join(__dirname, '.env');
+loadEnvFile();
 // USD per 1M tokens, from developers.openai.com/api/docs/pricing (checked 2026-11-02).
 const PRICES = { 'gpt-image-2.5-sunburst': { textIn: 5, imageIn: 8, imageOut: 30 } };
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
@@ -36,9 +37,24 @@ Options:
       --model M           default: $OPENAI_IMAGE_MODEL or ${DEFAULT_MODEL}
   -h, --help
 
-API key: $OPENAI_API_KEY, or a line OPENAI_API_KEY=... in ${KEY_FILE}`;
+API key: $OPENAI_API_KEY, or OPENAI_API_KEY=... in ${ENV_FILE} (copy .env.example).`;
 
 class UserError extends Error {}
+
+// Loads KEY=VALUE lines from the .env next to this script. Real environment variables win.
+function loadEnvFile() {
+  let text;
+  try {
+    text = readFileSync(ENV_FILE, 'utf8');
+  } catch {
+    return;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!m || process.env[m[1]]) continue;
+    process.env[m[1]] = m[2].replace(/^(["'])(.*)\1$/, '$2');
+  }
+}
 
 let opt, positionals;
 try {
@@ -81,13 +97,9 @@ async function readPrompt() {
   return positionals.join(' ');
 }
 
-async function apiKey() {
+function apiKey() {
   if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
-  try {
-    const m = (await fs.readFile(KEY_FILE, 'utf8')).match(/^\s*OPENAI_API_KEY\s*=\s*["']?([^"'\s]+)["']?\s*$/m);
-    if (m) return m[1];
-  } catch {}
-  throw new UserError(`No API key. Set OPENAI_API_KEY, or put OPENAI_API_KEY=sk-... in ${KEY_FILE}`);
+  throw new UserError(`No API key. Set OPENAI_API_KEY, or copy .env.example to ${ENV_FILE} and fill it in.`);
 }
 
 // Reads the -i files up front, so a bad path or type fails before any API call.
@@ -154,7 +166,7 @@ async function main() {
   if (opt.background) params.background = opt.background;
 
   const images = await readImages();
-  const key = await apiKey();
+  const key = apiKey();
   const mode = images.length ? `editing ${images.length} image(s)` : 'generating';
   console.error(`${opt.model}: ${mode}, ${n} x ${opt.size}, quality ${opt.quality}...`);
   const res = await request(key, params, images);
