@@ -1,0 +1,180 @@
+#!/usr/bin/env node
+// Generate or edit images with the OpenAI Images API. No dependencies; needs Node 18.3+.
+// Usage: node index.js [options] "prompt"        (node index.js --help for all options)
+// Saved file paths go to stdout, one per line. Progress, cost and errors go to stderr.
+
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { parseArgs } = require('node:util');
+
+const API = 'https://api.openai.com/v1/images';
+const DEFAULT_MODEL = 'gpt-image-2.5-sunburst';
+const KEY_FILE = path.join(os.homedir(), '.config', 'openai-img-gen', '.env');
+// USD per 1M tokens, from developers.openai.com/api/docs/pricing (checked 2026-11-02).
+const PRICES = { 'gpt-image-2.5-sunburst': { textIn: 5, imageIn: 8, imageOut: 30 } };
+const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+const FORMATS = ['png', 'jpeg', 'webp'];
+
+const HELP = `Generate an image from a prompt, or edit/combine images when -i is given.
+
+Usage: node index.js [options] "prompt"
+       node index.js [options] -f prompt.txt
+       echo "prompt" | node index.js [options] -
+
+Options:
+  -i, --image FILE        input image (PNG, JPEG, WebP); repeat for several. Switches to edit mode:
+                          the result is based on these images, in the order given.
+  -f, --prompt-file FILE  read the prompt from a file
+  -o, --out DIR           output folder (default: current folder)
+      --name PREFIX       file name prefix (default: image)
+  -s, --size SIZE         auto | 1024x1024 | 1536x1024 | 1024x1536 (default: auto)
+  -q, --quality Q         auto | low | medium | high (default: auto)
+  -n COUNT                number of images, 1-10 (default: 1)
+      --format F          png | jpeg | webp (default: png)
+      --background B      auto | transparent | opaque (transparent needs png or webp)
+      --model M           default: $OPENAI_IMAGE_MODEL or ${DEFAULT_MODEL}
+  -h, --help
+
+API key: $OPENAI_API_KEY, or a line OPENAI_API_KEY=... in ${KEY_FILE}`;
+
+class UserError extends Error {}
+
+let opt, positionals;
+try {
+  ({ values: opt, positionals } = parseArgs({ allowPositionals: true, options: optionSpec() }));
+} catch (err) {
+  console.error(`${err.message}\nRun with --help for usage.`);
+  process.exit(1);
+}
+
+function optionSpec() {
+  return {
+    image: { type: 'string', short: 'i', multiple: true, default: [] },
+    'prompt-file': { type: 'string', short: 'f' },
+    out: { type: 'string', short: 'o', default: '.' },
+    name: { type: 'string', default: 'image' },
+    size: { type: 'string', short: 's', default: 'auto' },
+    quality: { type: 'string', short: 'q', default: 'auto' },
+    n: { type: 'string', short: 'n', default: '1' },
+    format: { type: 'string', default: 'png' },
+    background: { type: 'string' },
+    model: { type: 'string', default: process.env.OPENAI_IMAGE_MODEL || DEFAULT_MODEL },
+    help: { type: 'boolean', short: 'h' },
+  };
+}
+
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readPrompt() {
+  if (opt['prompt-file']) {
+    if (positionals.length) throw new UserError('Give the prompt as text or with -f, not both.');
+    return fs.readFile(opt['prompt-file'], 'utf8').catch(() => {
+      throw new UserError(`Cannot read prompt file: ${opt['prompt-file']}`);
+    });
+  }
+  if (positionals.length === 1 && positionals[0] === '-') return readStdin();
+  return positionals.join(' ');
+}
+
+async function apiKey() {
+  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+  try {
+    const m = (await fs.readFile(KEY_FILE, 'utf8')).match(/^\s*OPENAI_API_KEY\s*=\s*["']?([^"'\s]+)["']?\s*$/m);
+    if (m) return m[1];
+  } catch {}
+  throw new UserError(`No API key. Set OPENAI_API_KEY, or put OPENAI_API_KEY=sk-... in ${KEY_FILE}`);
+}
+
+// Reads the -i files up front, so a bad path or type fails before any API call.
+async function readImages() {
+  return Promise.all(
+    opt.image.map(async (file) => {
+      const type = MIME[path.extname(file).toLowerCase()];
+      if (!type) throw new UserError(`${file}: only PNG, JPEG and WebP images are supported.`);
+      const data = await fs.readFile(file).catch(() => {
+        throw new UserError(`Cannot read image: ${file}`);
+      });
+      return { name: path.basename(file), blob: new Blob([data], { type }) };
+    }),
+  );
+}
+
+async function request(key, params, images) {
+  const headers = { Authorization: `Bearer ${key}` };
+  if (!images.length) {
+    return fetch(`${API}/generations`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+  }
+  const form = new FormData();
+  for (const [k, v] of Object.entries(params)) form.append(k, String(v));
+  const field = images.length > 1 ? 'image[]' : 'image';
+  for (const img of images) form.append(field, img.blob, img.name);
+  return fetch(`${API}/edits`, { method: 'POST', headers, body: form });
+}
+
+function apiError(res, body) {
+  const e = body?.error ?? {};
+  const id = res.headers.get('x-request-id');
+  let msg = `OpenAI API error ${res.status}${e.code ? ` (${e.code})` : ''}: ${e.message ?? res.statusText}`;
+  if (e.code === 'moderation_blocked') {
+    msg += '\nThe request was blocked by a safety check. Reword the prompt or change the input images and try again.';
+  }
+  return new UserError(id ? `${msg}\nRequest id: ${id}` : msg);
+}
+
+function logCost(usage) {
+  if (!usage) return;
+  const textIn = usage.input_tokens_details?.text_tokens ?? 0;
+  const imageIn = usage.input_tokens_details?.image_tokens ?? 0;
+  const imageOut = usage.output_tokens ?? 0;
+  const price = PRICES[opt.model];
+  const cost = price
+    ? ` Cost: about $${((textIn * price.textIn + imageIn * price.imageIn + imageOut * price.imageOut) / 1e6).toFixed(3)}`
+    : '';
+  console.error(`Tokens: ${textIn} text in, ${imageIn} image in, ${imageOut} image out.${cost}`);
+}
+
+async function main() {
+  if (opt.help) return console.log(HELP);
+  const prompt = (await readPrompt()).trim();
+  if (!prompt) throw new UserError('No prompt. Run with --help for usage.');
+  const n = Number(opt.n);
+  if (!Number.isInteger(n) || n < 1 || n > 10) throw new UserError('-n must be a whole number from 1 to 10.');
+  if (!FORMATS.includes(opt.format)) throw new UserError(`--format must be one of: ${FORMATS.join(', ')}.`);
+
+  const params = { model: opt.model, prompt, n, size: opt.size, quality: opt.quality, output_format: opt.format };
+  if (opt.background) params.background = opt.background;
+
+  const images = await readImages();
+  const key = await apiKey();
+  const mode = images.length ? `editing ${images.length} image(s)` : 'generating';
+  console.error(`${opt.model}: ${mode}, ${n} x ${opt.size}, quality ${opt.quality}...`);
+  const res = await request(key, params, images);
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw apiError(res, body);
+  if (!body?.data?.length) throw new UserError('The API returned no images.');
+
+  await fs.mkdir(opt.out, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const ext = opt.format === 'jpeg' ? 'jpg' : opt.format;
+  for (const [i, img] of body.data.entries()) {
+    if (!img.b64_json) throw new UserError('The API returned an image without data.');
+    const file = path.resolve(opt.out, `${opt.name}-${stamp}${body.data.length > 1 ? `-${i + 1}` : ''}.${ext}`);
+    await fs.writeFile(file, Buffer.from(img.b64_json, 'base64'));
+    console.log(file);
+  }
+  logCost(body.usage);
+}
+
+main().catch((err) => {
+  console.error(err instanceof UserError ? err.message : err);
+  process.exitCode = 1;
+});
